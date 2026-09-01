@@ -36,5 +36,30 @@ jobs:
 
     - name: Test with pytest
       run: |
-        python -m pytest -v
+        python -m pytest -v -m "not firefox_profiler"
 
+  firefox-profiler-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: install apt dependencies
+      run: |
+        sudo apt install libunwind-dev
+
+    - name: Set up Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.9"
+
+    - name: install dependencies
+      run: |
+        python -m pip install pytest vmprof playwright
+        python -m playwright install --with-deps chromium
+
+    - name: Test live Firefox Profiler compatibility
+      run: |
+        python -m pytest -v -m firefox_profiler src/vmprofconvert/test/test_firefox_profiler.py
