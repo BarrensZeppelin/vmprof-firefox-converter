@@ -31,3 +31,8 @@ package-dir = "src"
 [tool.pyright]
 include = ["src"]
 typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+markers = [
+    "firefox_profiler: compatibility test against the live Firefox Profiler",
+]
