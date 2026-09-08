@@ -9,7 +9,7 @@ from vmprofconvert import convert_vmprof, convert_stats_with_pypylog
 from vmprofconvert import convert_stats
 from vmprofconvert import Converter
 from vmprofconvert import Thread
-from vmprofconvert import CATEGORY_PYTHON, CATEGORY_NATIVE, CATEGORY_JIT, CATEGORY_ASM, CATEGORY_JIT_INLINED, CATEGORY_MIXED, CATEGORY_INTERPRETER, CATEGORY_GC
+from vmprofconvert import CATEGORY_PYTHON, CATEGORY_NATIVE, CATEGORY_JIT, CATEGORY_ASM, CATEGORY_JIT_INLINED, CATEGORY_MIXED, CATEGORY_INTERPRETER, CATEGORY_GC, CATEGORY_OTHER
 from vmprofconvert.pypylog import parse_pypylog, cut_pypylog, rescale_pypylog, filter_top_level_logs
 from vmprofconvert.__main__ import write_file_dict, save_zip, load_zip_dict, extract_files
 
@@ -292,7 +292,8 @@ def test_jit_asm_inline():
     with open(path, "w") as output_file:
         output_file.write(json.dumps(json.loads(c.dumps_static()), indent=2))
     thread = c.threads[12345]
-    assert thread.stacktable == [[1, None, CATEGORY_MIXED], [2, 0, CATEGORY_JIT_INLINED]]
+    assert thread.stacktable == [[1, None, CATEGORY_MIXED], [3, 0, CATEGORY_JIT_INLINED]]
+    assert [thread.frametable[frame][3] for frame, _, _ in thread.stacktable] == [CATEGORY_MIXED, CATEGORY_JIT_INLINED]
 
 def test_pypy_pystone():
     path = os.path.join(os.path.dirname(__file__), "profiles/pypy-pystone.prof")
@@ -307,15 +308,18 @@ def test_pypy_pystone():
 
 def test_check_asm_frame():
     categories = []
+    frames = []
     c = Converter()
     thread = Thread()
     stack_info = "asm_function"
-    c.check_asm_frame(categories, stack_info, thread, None)
-    assert categories == []# asm frames currently disabled 
+    c.check_asm_frame(categories, stack_info, thread, frames)
+    assert categories == []  # asm frames currently disabled
     categories.append(CATEGORY_JIT)
-    thread.add_frame("jit_function", 7, "dummyfile.py", CATEGORY_JIT, 0, -1)
-    c.check_asm_frame(categories, stack_info, thread, 0)
+    frames.append(thread.add_frame("jit_function", 7, "dummyfile.py", CATEGORY_JIT, 0, -1))
+    c.check_asm_frame(categories, stack_info, thread, frames)
     assert categories == [CATEGORY_JIT_INLINED]# jit frame + asm frame => jit_inlined frame
+    assert thread.frametable[frames[-1]][3] == CATEGORY_JIT_INLINED
+    assert thread.nativesymbols[thread.frametable[frames[-1]][1]][2] == stack_info
 
 def test_add_native_frame():
     c = Converter()
@@ -811,6 +815,26 @@ def test_dumps_vmprof_categories_inf_frametable():
     # this profile contains python and native frames
     assert CATEGORY_PYTHON in frames["category"]
     assert CATEGORY_NATIVE in frames["category"]
+
+def test_grey_default_category():
+    ### The Firefox Profiler looks up its fallback category by color and would
+    ### otherwise index meta.categories with -1 while rendering the call tree
+    categories = Converter().dump_categories()
+    assert [category["color"] for category in categories].index("grey") == CATEGORY_OTHER
+    assert categories[CATEGORY_OTHER]["name"] == "Other"
+
+def test_stacktable_categories_match_frametable():
+    ### The Firefox Profiler ignores stackTable categories and derives them from
+    ### the frames, so a stack must not disagree with its top frame
+    path = os.path.join(os.path.dirname(__file__), "profiles/pypy-pystone.prof")
+    converter = convert_vmprof(path)
+
+    for thread in converter.threads.values():
+        categories = set()
+        for frame, _, category in thread.stacktable:
+            assert thread.frametable[frame][3] == category
+            categories.add(category)
+        assert CATEGORY_JIT_INLINED in categories
 
 # This test does only make sense when running vmprof with sample-timestamp support like 
 # https://github.com/Cskorpion/vmprof-python/tree/sample_timestamps

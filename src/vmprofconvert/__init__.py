@@ -16,6 +16,7 @@ CATEGORY_JIT_INLINED = 5
 CATEGORY_MIXED = 6
 CATEGORY_GC = 7
 CATEGORY_INTERPRETER = 8
+CATEGORY_OTHER = 9  # the Firefox Profiler resolves call nodes with conflicting categories to the grey one
 
 PPL_TIME = 0
 PPL_ACTION = 1
@@ -182,7 +183,7 @@ class Converter:
                 if isinstance(stack_info[j], JittedCode):
                     frames.append(self.add_jit_frame(thread, categories, addr_info, frames))
                 elif isinstance(stack_info[j], AssemblerCode):
-                    self.check_asm_frame(categories, stack_info[j], thread, frames[-1])
+                    self.check_asm_frame(categories, stack_info[j], thread, frames)
                 elif addr_info is None: # Class NativeCode isnt used
                     #pass
                     categories.append(CATEGORY_NATIVE)
@@ -232,12 +233,13 @@ class Converter:
         frameindex = thread.add_frame(funcname, -1, filename, CATEGORY_NATIVE, -1, -1)
         return frameindex
 
-    def check_asm_frame(self, categories, stack_info, thread, last_frame):
-        if len(categories) > 0 and categories[-1] == 3:# if last frame is jit and current is asm => replace with inline jit frame
-            categories.pop()
-            categories.append(CATEGORY_JIT_INLINED)
-            last_nativesymbol_index = thread.frametable[last_frame][1]
-            thread.nativesymbols[last_nativesymbol_index][2] = stack_info
+    def check_asm_frame(self, categories, stack_info, thread, frames):
+        if len(categories) > 0 and categories[-1] == CATEGORY_JIT:  # if last frame is jit and current is asm => replace with inline jit frame
+            categories[-1] = CATEGORY_JIT_INLINED
+            frames[-1] = thread.recategorize_frame(frames[-1], CATEGORY_JIT_INLINED)
+            last_nativesymbol_index = thread.frametable[frames[-1]][1]
+            if last_nativesymbol_index != -1:
+                thread.nativesymbols[last_nativesymbol_index][2] = stack_info
         else:# asm disabled
             pass
             #categories.append(CATEGORY_ASM)#asm
@@ -419,6 +421,15 @@ class Converter:
                 ]
             }
         )
+        categories.append(
+            {
+                "name": "Other",
+                "color": "grey",
+                "subcategories": [
+                    "Other"
+                ]
+            }
+        )
         return categories
 
     def dump_counters(self):
@@ -462,7 +473,7 @@ class Thread:
         self.functable = []# list of [stringtable_index, stringtable_index, int, resource_index] funcname, filename, line  line == -1 if profile_lines == False, resource_index
         self.funtable_positions = {}
         self.frametable: list[tuple[int, int, int, int]] = []# list of [functable_index, nativesymbol_index, line, category]
-        self.frametable_positions: dict[tuple[str, str, int, int], int] = {}# key is (funcname, file, line, category)
+        self.frametable_positions: dict[tuple[int, int, int, int], int] = {}  # key is (functable_index, nativesymbol_index, line, category)
         self.samples = []# list of [stackindex, time in ms], no need for sample_positions
         self.nativesymbols = []# list of [libindex, stringindex, addr]
         self.nativesymbols_positions = {}# key is (libindex, string)
@@ -541,13 +552,23 @@ class Thread:
             return result
 
     def add_frame(self, funcname: str, line: int, file: str, category, libindex, addr) -> int:
-        nidx = len(self.frametable_positions)
-        idx = self.frametable_positions.setdefault((funcname, file, line, category), nidx)
+        functable_index = self.add_func(funcname, file, line, category, libindex)
+        nativesymbol_index = self.add_nativesymbol(libindex, funcname, addr)
+        return self.add_frame_for_func(functable_index, nativesymbol_index, line, category)
+
+    def add_frame_for_func(self, functable_index: int, nativesymbol_index: int, line: int, category) -> int:
+        nidx = len(self.frametable)
+        key = (functable_index, nativesymbol_index, line, category)
+        idx = self.frametable_positions.setdefault(key, nidx)
         if idx == nidx:
-            functable_index = self.add_func(funcname, file, line, category, libindex)
-            nativesymbol_index = self.add_nativesymbol(libindex, funcname, addr)
             self.frametable.append((functable_index, nativesymbol_index, line, category))
         return idx
+
+    def recategorize_frame(self, frameindex: int, category) -> int:
+        # The Firefox Profiler derives stack categories from frame categories, so a
+        # frame that turns out to belong to another category has to be replaced.
+        functable_index, nativesymbol_index, line, _ = self.frametable[frameindex]
+        return self.add_frame_for_func(functable_index, nativesymbol_index, line, category)
 
     def add_sample(self, stackindex, time):
         self.samples.append([stackindex, time]) # stackindex, ms since starttime

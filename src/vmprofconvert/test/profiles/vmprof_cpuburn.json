@@ -74,6 +74,13 @@
         "subcategories": [
           "Other"
         ]
+      },
+      {
+        "name": "Other",
+        "color": "grey",
+        "subcategories": [
+          "Other"
+        ]
       }
     ],
     "preprocessedProfileVersion": 47,
